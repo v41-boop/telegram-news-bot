@@ -1,77 +1,79 @@
 import os
-import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    ContextTypes,
-    CallbackQueryHandler,
-)
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from dotenv import load_dotenv
+import img2pdf
+from pdf2docx import Converter
 
-# تحميل متغيرات البيئة
 load_dotenv()
+
 TOKEN = os.getenv("TELEGRAM_TOKEN")
-NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 
-# التحقق من المتغيرات
-if not TOKEN:
-    raise ValueError("❌ TELEGRAM_TOKEN غير موجود في متغيرات البيئة")
+user_mode = {}
 
-if not NEWS_API_KEY:
-    raise ValueError("❌ NEWS_API_KEY غير موجود في متغيرات البيئة")
-
-
-# ✅ دالة start (لازم async)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     keyboard = [
-        [InlineKeyboardButton("تقنية", callback_data="technology")],
-        [InlineKeyboardButton("رياضة", callback_data="sports")],
-        [InlineKeyboardButton("أخبار عامة", callback_data="general")],
+        [InlineKeyboardButton("📄 PDF ➜ Word", callback_data="pdf_word")],
+        [InlineKeyboardButton("🖼 صورة ➜ PDF", callback_data="img_pdf")]
     ]
 
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await update.message.reply_text(
-        "اختر نوع الأخبار:",
+        "اختر نوع التحويل:",
         reply_markup=reply_markup
     )
 
-
-# ✅ دالة الأزرار
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     query = update.callback_query
     await query.answer()
 
-    category = query.data
-    url = f"https://newsapi.org/v2/top-headlines?country=eg&category={category}&apiKey={NEWS_API_KEY}"
+    user_mode[query.from_user.id] = query.data
 
-    try:
-        response = requests.get(url).json()
-        articles = response.get("articles", [])[:5]
+    await query.edit_message_text("📤 أرسل الملف للتحويل")
 
-        if not articles:
-            message = "لا توجد أخبار حالياً."
-        else:
-            message = ""
-            for art in articles:
-                title = art.get("title", "بدون عنوان")
-                link = art.get("url", "")
-                message += f"{title}\n{link}\n\n"
+async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-        await query.edit_message_text(text=message)
+    user_id = update.message.from_user.id
 
-    except Exception as e:
-        await query.edit_message_text(
-            text=f"حدث خطأ أثناء جلب الأخبار:\n{e}"
-        )
+    if user_id not in user_mode:
+        await update.message.reply_text("اختر نوع التحويل أولاً /start")
+        return
 
+    mode = user_mode[user_id]
 
-# تشغيل البوت
+    file = await update.message.document.get_file()
+    filename = update.message.document.file_name
+
+    await file.download_to_drive(filename)
+
+    if mode == "pdf_word":
+
+        output = "output.docx"
+
+        cv = Converter(filename)
+        cv.convert(output)
+        cv.close()
+
+        await update.message.reply_document(document=open(output,"rb"))
+
+    elif mode == "img_pdf":
+
+        output = "output.pdf"
+
+        with open(output,"wb") as f:
+            f.write(img2pdf.convert(filename))
+
+        await update.message.reply_document(document=open(output,"rb"))
+
 app = ApplicationBuilder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CallbackQueryHandler(button))
+app.add_handler(MessageHandler(filters.Document.ALL, handle_file))
 
-print("✅ البوت يعمل…")
+print("Bot Running...")
+
 app.run_polling()
